@@ -29,7 +29,7 @@ PIPELINE_SHEET_COLS = [
     "Contact Person at Customer / Party",
     "Product Mfgd. By Customer / Party",
     "Our Sample Product Name", "Supplier Name",
-    "Sample Quantity","Sample Unit", "Handed over By",
+    "Sample Quantity","Sample Unit", "Handed over By", "Handed over To",
     "Enquiry date",
     "In Stock?",
     "Enquiry sent to Principal date",
@@ -75,6 +75,7 @@ def create_pipeline_entry(data: dict) -> str:
         "stock_received_date":    "",
         "handover_date":          "",
         "handed_over_by":         "",
+        "handed_over_to":         "",
         "feedback":               "",
         "purchased":              "",
 

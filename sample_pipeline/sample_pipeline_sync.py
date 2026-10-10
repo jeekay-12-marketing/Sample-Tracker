@@ -84,6 +84,7 @@ def move_to_main_sheet(doc: dict):
             "Sample Quantity":                      fmt(doc.get("standard_qty", "")),
             "Sample Unit":                          fmt(doc.get("standard_unit", "")),
             "Handed over By":                       fmt(doc.get("handed_over_by", "")),
+            "Handed over To":                       fmt(doc.get("handed_over_to", "")),
             "Feedback":                             fmt(doc.get("feedback", "")),
             "Purchased?":                           fmt(doc.get("purchased", "")),
         }
@@ -126,6 +127,7 @@ def build_sheet_row(d:dict) -> list:
         fmt(d.get("standard_qty", "")),
         fmt(d.get("standard_unit", "")),
         fmt(d.get("handed_over_by", "")),
+        fmt(d.get("handed_over_to", "")),
         fmt(d.get("enquiry_date", "")),
         fmt(d.get("in_stock", "")),
         fmt(d.get("supplier_enquiry_date", "")),

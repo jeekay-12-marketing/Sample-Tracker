@@ -2,6 +2,7 @@
 Pipeline Tracker — view and update active pipeline entries.
 Shows full stage history and allows advancing to next stage.
 """
+import html
 import streamlit as st
 import pandas as pd
 from datetime import date, datetime
@@ -240,7 +241,7 @@ def render_update_form(row: pd.Series, doc_id: str):
         updates["stock_received_date"] = str(recv_date)
 
     elif nxt == "handed_over":
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         with col1:
             ho_date = st.date_input(
                 "Handover Date *",
@@ -252,10 +253,17 @@ def render_update_form(row: pd.Series, doc_id: str):
                 placeholder="e.g. Mr. Rajan",
                 key=f"{key_prefix}_ho_by"
             )
-        if not ho_by.strip():
+        with col3:
+            ho_to = st.text_input(
+                "Handed Over To *",
+                placeholder="e.g. Ms. Priya",
+                key=f"{key_prefix}_ho_to"
+            )
+        if not ho_by.strip() or not ho_to.strip():
             valid = False
         updates["handover_date"]  = str(ho_date)
         updates["handed_over_by"] = ho_by.strip()
+        updates["handed_over_to"] = ho_to.strip()
 
     # ── Two step confirm ──
     if not st.session_state.get(confirm_key):
@@ -356,10 +364,19 @@ def render_timeline(row: pd.Series):
         cls      = "" if done else "pending"
         date_str = fmt_date(step_date) if done else "Pending"
         icon     = STAGES.get(step_stage, {}).get("icon", "")
+        handover_details = ""
+        if step_stage == "handed_over" and done:
+            handed_over_by = html.escape(str(row.get("handed_over_by") or "—"))
+            handed_over_to = html.escape(str(row.get("handed_over_to") or "—"))
+            handover_details = (
+                f'<div class="timeline-date">By: {handed_over_by} · '
+                f'To: {handed_over_to}</div>'
+            )
         html_parts.append(f"""
         <div class="timeline-item {cls}">
             <div class="timeline-date">{date_str}</div>
             {icon} {step_label}
+            {handover_details}
         </div>
         """.strip())
     html_parts.append("</div>")

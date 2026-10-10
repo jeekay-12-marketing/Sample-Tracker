@@ -10,7 +10,8 @@ from datetime import datetime
 from samples_new.sample_constants import (
     load_sample_data, SAMPLE_CSS, urgency_badge, feedback_badge,
     COL_BRANCH, COL_AREA, COL_CUSTOMER, COL_SAMPLE_PROD,
-    COL_HO_DATE, COL_HO_BY, COL_CONTACT, COL_FEEDBACK, COL_PURCHASED
+    COL_HO_DATE, COL_HO_BY, COL_HO_TO, COL_CONTACT, COL_FEEDBACK,
+    COL_PURCHASED
 )
 from samples_new.sample_firestore import (
     load_all_latest_feedback, classify_feedback,
@@ -38,6 +39,7 @@ def _build_grouped_data(df: pd.DataFrame) -> dict:
         customer = str(row.get(COL_CUSTOMER, "—")).strip() or "—"
         ho_date  = row[COL_HO_DATE].strftime("%d %b %Y") if pd.notna(row.get(COL_HO_DATE)) else "—"
         ho_by    = str(row.get(COL_HO_BY, "—")).strip() or "—"
+        ho_to    = str(row.get(COL_HO_TO, "—")).strip() or "—"
         contact  = str(row.get(COL_CONTACT, "—")).strip() or "—"
         qty      = str(row.get("Sample Quantity", "—")).strip() or "—"
         latest   = str(row.get("Latest Feedback", "")).strip()
@@ -55,6 +57,7 @@ def _build_grouped_data(df: pd.DataFrame) -> dict:
             "product":   str(row.get(COL_SAMPLE_PROD, "—")).strip() or "—",
             "ho_date":   ho_date,
             "ho_by":     ho_by,
+            "ho_to":     ho_to,
             "contact":   contact,
             "qty":       qty,
             "feedbacks": feedbacks,
@@ -246,6 +249,7 @@ def _show_needs_attention(fdf):
             ho_disp  = row[COL_HO_DATE].strftime("%d %b %Y") \
                        if pd.notna(row.get(COL_HO_DATE)) else "—"
             ho_by    = esc(row.get(COL_HO_BY))
+            ho_to    = esc(row.get(COL_HO_TO))
             contact  = esc(row.get(COL_CONTACT))
             days_ago = int(row["Days Since HO"])
             latest   = str(row.get("Latest Feedback", "")) or ""
@@ -268,7 +272,7 @@ def _show_needs_attention(fdf):
                             📦 {product} &nbsp;·&nbsp;
                             📍 {esc(row.get(COL_AREA))} &nbsp;·&nbsp;
                             📅 {ho_disp} (<b>{days_ago}d ago</b>) &nbsp;·&nbsp;
-                            🤝 {ho_by} &nbsp;·&nbsp; 👤 {contact}
+                            🤝 By: {ho_by} &nbsp;·&nbsp; ➡️ To: {ho_to} &nbsp;·&nbsp; 👤 {contact}
                         </div>
                     </div>
                     {urgency_badge(urg)}
@@ -301,7 +305,7 @@ def _show_needs_attention(fdf):
     # ── Excel download — always uses FULL pending_df (all filters, all pages) ──
     st.markdown("<div style='margin-top:1rem;'></div>", unsafe_allow_html=True)
     dl_cols = [COL_BRANCH, COL_AREA, COL_CUSTOMER, COL_SAMPLE_PROD,
-               COL_HO_DATE, COL_HO_BY, COL_CONTACT, COL_PURCHASED,
+               COL_HO_DATE, COL_HO_BY, COL_HO_TO, COL_CONTACT, COL_PURCHASED,
                "Days Since HO", "Urgency", "Latest Feedback", "Feedback Status"]
     dl_cols = [c for c in dl_cols if c in pending_df.columns]
     dl_df   = display_df[dl_cols].copy()  # ← full pending_df not display_df
@@ -536,6 +540,7 @@ def _render_positive_purchase_status(responded_df, COL_PUR):
                 ho_disp  = row[COL_HO_DATE].strftime("%d %b %Y") \
                            if pd.notna(row.get(COL_HO_DATE)) else "—"
                 ho_by    = esc(row.get(COL_HO_BY))
+                ho_to    = esc(row.get(COL_HO_TO))
                 contact  = esc(row.get(COL_CONTACT))
                 days_ago = int(row["Days Since HO"])
                 latest   = esc(str(row.get("Latest Feedback", "")) or "")
@@ -554,7 +559,7 @@ def _render_positive_purchase_status(responded_df, COL_PUR):
                                 📦 {product} &nbsp;·&nbsp;
                                 📍 {esc(row.get(COL_AREA))} &nbsp;·&nbsp;
                                 📅 {ho_disp} (<b>{days_ago}d ago</b>) &nbsp;·&nbsp;
-                                🤝 {ho_by} &nbsp;·&nbsp; 👤 {contact}
+                                🤝 By: {ho_by} &nbsp;·&nbsp; ➡️ To: {ho_to} &nbsp;·&nbsp; 👤 {contact}
                             </div>
                         </div>
                     </div>
@@ -565,7 +570,7 @@ def _render_positive_purchase_status(responded_df, COL_PUR):
     # ── Excel download ──
     st.markdown("<div style='margin-top:1.5rem;'></div>", unsafe_allow_html=True)
     dl_cols = [COL_BRANCH, COL_AREA, COL_CUSTOMER, COL_SAMPLE_PROD,
-               COL_HO_DATE, COL_HO_BY, COL_CONTACT,
+               COL_HO_DATE, COL_HO_BY, COL_HO_TO, COL_CONTACT,
                "Days Since HO", "Latest Feedback", COL_PUR]
     dl_cols = [c for c in dl_cols if c in base_df.columns]
     dl_df   = base_df[dl_cols].copy()
@@ -729,6 +734,7 @@ def _render_negative_purchase_status(responded_df, COL_PUR):
                 ho_disp  = row[COL_HO_DATE].strftime("%d %b %Y") \
                            if pd.notna(row.get(COL_HO_DATE)) else "—"
                 ho_by    = esc(row.get(COL_HO_BY))
+                ho_to    = esc(row.get(COL_HO_TO))
                 contact  = esc(row.get(COL_CONTACT))
                 days_ago = int(row["Days Since HO"])
                 latest   = esc(str(row.get("Latest Feedback", "")) or "")
@@ -747,7 +753,7 @@ def _render_negative_purchase_status(responded_df, COL_PUR):
                                 📦 {product} &nbsp;·&nbsp;
                                 📍 {esc(row.get(COL_AREA))} &nbsp;·&nbsp;
                                 📅 {ho_disp} (<b>{days_ago}d ago</b>) &nbsp;·&nbsp;
-                                🤝 {ho_by} &nbsp;·&nbsp; 👤 {contact}
+                                🤝 By: {ho_by} &nbsp;·&nbsp; ➡️ To: {ho_to} &nbsp;·&nbsp; 👤 {contact}
                             </div>
                         </div>
                     </div>
@@ -758,7 +764,7 @@ def _render_negative_purchase_status(responded_df, COL_PUR):
     # ── Excel download ──
     st.markdown("<div style='margin-top:1.5rem;'></div>", unsafe_allow_html=True)
     dl_cols = [COL_BRANCH, COL_AREA, COL_CUSTOMER, COL_SAMPLE_PROD,
-               COL_HO_DATE, COL_HO_BY, COL_CONTACT,
+               COL_HO_DATE, COL_HO_BY, COL_HO_TO, COL_CONTACT,
                "Days Since HO", "Latest Feedback", COL_PUR]
     dl_cols = [c for c in dl_cols if c in base_df.columns]
     dl_df   = base_df[dl_cols].copy()
@@ -936,6 +942,7 @@ def show_all_samples(fdf=None):
         "Sample Quantity",
         "Sample Unit",  
         COL_HO_BY,
+        COL_HO_TO,
         "Latest Feedback", 
         "Feedback Status", 
         "Urgency", 
