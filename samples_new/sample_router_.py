@@ -123,27 +123,67 @@ def enrich(df: pd.DataFrame, history: dict) -> pd.DataFrame:
     df = df.copy()
     COL_HO_DATE = "Hand over to customer date"
 
+    def normalize_date(value):
+        if value is None or pd.isna(value) or not str(value).strip():
+            return ""
+        parsed = pd.to_datetime(value, dayfirst=True, errors="coerce")
+        return "" if pd.isna(parsed) else parsed.date().isoformat()
+
+    def normalize_text(value):
+        if value is None or pd.isna(value):
+            return ""
+        return " ".join(str(value).split()).casefold()
+
+    # Older Firebase entries may differ from the sheet in capitalization or
+    # whitespace. Normalize both sides so their explicit status is still used.
+    history_by_sample = {
+        (normalize_text(customer), normalize_text(product), normalize_date(ho_date)): entry
+        for (customer, product, ho_date), entry in history.items()
+    }
+
     def get_latest(row):
         ho     = row[COL_HO_DATE] if COL_HO_DATE in row.index else None
-        ho_str = str(ho.date()) if pd.notna(ho) else "" if ho is not None else ""
+        ho_str = normalize_date(ho)
         key = (
-            str(row.get(COL_CUSTOMER, "")).strip(),
-            str(row.get(COL_SAMPLE_PROD, "")).strip(),
+            normalize_text(row.get(COL_CUSTOMER, "")),
+            normalize_text(row.get(COL_SAMPLE_PROD, "")),
             ho_str
         )
-        entry = history.get(key)
+        entry = history_by_sample.get(key)
         if entry:
-            return entry.get("feedback", ""), entry.get("fb_status", None)
+            return (
+                entry.get("feedback", ""),
+                entry.get("fb_status", None),
+                entry.get("purchased", None),
+            )
         fb = row.get("Feedback", "")
-        return ("" if pd.isna(fb) else str(fb)), None
+        return ("" if pd.isna(fb) else str(fb)), None, None
 
-    df[["Latest Feedback", "Latest FB Status"]] = df.apply(
+    df[["Latest Feedback", "Latest FB Status", "Latest FB Purchased"]] = df.apply(
         get_latest, axis=1, result_type="expand"
     )
     df["Feedback Status"] = df.apply(
         lambda r: classify_feedback(r["Latest Feedback"], r["Latest FB Status"]),
         axis=1
     )
+    if "Purchased?" not in df.columns:
+        df["Purchased?"] = "Purchase Data Not Available"
+
+    def get_purchased(row):
+        value = row.get("Latest FB Purchased")
+        if value is None or pd.isna(value) or not str(value).strip():
+            value = row.get("Purchased?", "")
+        if value is None or pd.isna(value):
+            return "Purchase Data Not Available"
+        cleaned = " ".join(str(value).split()).casefold()
+        return {
+            "yes": "Yes",
+            "not yet": "Not Yet",
+            "no": "No",
+            "purchase data not available": "Purchase Data Not Available",
+        }.get(cleaned, str(value).strip() or "Purchase Data Not Available")
+
+    df["Purchased?"] = df.apply(get_purchased, axis=1)
     df["Days Since HO"] = (
         pd.Timestamp.now() - df[COL_HO_DATE]
     ).dt.days.fillna(0).astype(int)
