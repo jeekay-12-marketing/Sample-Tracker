@@ -56,9 +56,10 @@ def update_feedback_entry(customer, product, ho_date, entry_id, new_text, new_da
     print(f"[update_feedback_entry] Firestore write done, now calling sync_latest_feedback_to_sheet...")
     # ← sync latest to sheet
     from samples_new.sample_firestore import sync_latest_feedback_to_sheet
-    sync_latest_feedback_to_sheet(customer, product, ho_date, new_text.strip(),
-                                   purchased=purchased, fb_status=new_status)
+    sync_latest_feedback_to_sheet(customer, product, ho_date)
     load_feedback_for_sample.clear()
+    from samples_new.sample_firestore import load_all_latest_feedback
+    load_all_latest_feedback.clear()
 
 
 # ─────────────────────────────────────────
@@ -259,6 +260,13 @@ def show_detailed_info(fdf: pd.DataFrame):
         <div class="sd-sub">Full feedback history per company.</div>
         <div class="sd-divider"></div>
     </div>""", unsafe_allow_html=True)
+    sheet_sync_error = st.session_state.pop("feedback_sheet_sync_error", None)
+    if sheet_sync_error:
+        st.warning(
+            "Feedback was saved in Firebase, but the main sheet could not be "
+            f"updated: {sheet_sync_error}"
+        )
+
     if st.session_state.pop("_card_deleted", False):
         st.rerun() 
 
