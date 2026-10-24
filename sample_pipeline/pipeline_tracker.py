@@ -381,7 +381,9 @@ def render_timeline(row: pd.Series):
         """.strip())
     html_parts.append("</div>")
 
-    st.markdown("".join(html_parts), unsafe_allow_html=True)
+    # This is block HTML. Render it as HTML directly so Streamlit's Markdown
+    # parser cannot treat indented lines inside the timeline as a code block.
+    st.html("".join(html_parts))
 
 
 # ─────────────────────────────────────────
