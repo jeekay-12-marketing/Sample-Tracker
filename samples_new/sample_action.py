@@ -356,7 +356,12 @@ def _show_purchase_status(fdf):
       - Negative feedback: simplified breakdown — Didn't Purchase / No Data only,
         since a negative response is never followed by a "Yes"/"Not Yet" purchase.
     """
-    responded_df = fdf[fdf["Urgency"] == "Responded"].copy()
+    # Use the feedback classification as the source of truth. Urgency can be
+    # stale or derived differently for older records; it must not hide a
+    # sample that is explicitly classified as Positive or Negative.
+    responded_df = fdf[
+        fdf["Feedback Status"].isin(["Positive", "Negative"])
+    ].copy()
 
     if responded_df.empty:
         st.info("No responded samples yet.")
@@ -903,15 +908,18 @@ def show_all_samples(fdf=None):
         st.warning("No samples match the current filters.")
         return
 
+    # Work on a copy because this frame is shared with other dashboard tabs.
+    fdf = fdf.copy()
+
     COL_HO_DATE = "Hand over to customer date"
 
-    # === DATE PROCESSING (Do this FIRST) ===
+    # Normalize mixed sheet formats before formatting the visible date. Keep
+    # this as datetime data in show_df so the Excel download retains real dates.
     if COL_HO_DATE in fdf.columns:
-        # Convert to datetime
-        fdf[COL_HO_DATE] = pd.to_datetime(fdf[COL_HO_DATE], errors='coerce', dayfirst=True)
-        
-        # Create display column
-        fdf[COL_HO_DATE + "_display"] = fdf[COL_HO_DATE].dt.strftime("%d %b %Y").fillna("—")
+        fdf[COL_HO_DATE] = pd.to_datetime(
+            fdf[COL_HO_DATE], format="mixed", errors="coerce", dayfirst=True
+        )
+
     # ====================== SEARCH ======================
     search = st.text_input(
         "🔍 Search", placeholder="Search customer, product, area...",
@@ -953,8 +961,18 @@ def show_all_samples(fdf=None):
 
 
     # ====================== DISPLAY ======================
+    table_df = show_df[show_cols].copy()
+    if COL_HO_DATE in table_df.columns:
+        table_df[COL_HO_DATE] = (
+            pd.to_datetime(
+                table_df[COL_HO_DATE], format="mixed", errors="coerce", dayfirst=True
+            )
+            .dt.strftime("%d %b %Y")
+            .fillna("—")
+        )
+
     st.dataframe(
-        show_df[show_cols].reset_index(drop=True),
+        table_df.reset_index(drop=True),
         width='stretch', 
         height=520,
         use_container_width=True,
@@ -966,10 +984,6 @@ def show_all_samples(fdf=None):
     buf = BytesIO()
     with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
         excel_df = show_df[show_cols].copy()
-        # Optional: Put real datetime in Excel too
-        if COL_HO_DATE in excel_df.columns and COL_HO_DATE in fdf.columns:
-            excel_df[COL_HO_DATE] = fdf[COL_HO_DATE].iloc[:len(excel_df)]  # align lengths
-        
         excel_df.to_excel(writer, index=False, sheet_name="All Samples")
         ws = writer.sheets["All Samples"]
         ws.set_column(0, len(show_cols) - 1, 22)
