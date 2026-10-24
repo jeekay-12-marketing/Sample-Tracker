@@ -122,6 +122,11 @@ def show_notifications():
     </div>""", unsafe_allow_html=True)
 
     with st.spinner("Checking pipeline for alerts..."):
+        # Pipeline data may have changed in another session or app worker.
+        # Alerts are derived from each entry's current stage, so refresh the
+        # source before calculating them; this also drops alerts for stages
+        # an entry has already left.
+        load_pipeline_entries.clear()
         df     = load_pipeline_entries()
         alerts = get_pipeline_alerts(df) if not df.empty else []
 
