@@ -60,7 +60,13 @@ def load_sample_data() -> pd.DataFrame:
         df.columns = df.columns.str.strip()
         for col in [COL_ENQ_DATE, COL_HO_DATE]:
             if col in df.columns:
-                df[col] = pd.to_datetime(df[col], dayfirst=True, errors="coerce")
+                # Sheet rows can contain dates written in different formats
+                # (for example, older slash-separated dates and Firebase rows
+                # with hyphens). Infer each value independently so valid dates
+                # are not turned into NaT by a column-wide format guess.
+                df[col] = pd.to_datetime(
+                    df[col], format="mixed", dayfirst=True, errors="coerce"
+                )
         for col in [COL_BRANCH, COL_AREA, COL_CUSTOMER,
                     COL_SAMPLE_PROD, COL_HO_BY, COL_HO_TO, COL_FEEDBACK]:
             if col in df.columns:
