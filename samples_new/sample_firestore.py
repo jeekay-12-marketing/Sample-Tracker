@@ -51,6 +51,7 @@ def add_feedback(customer: str, product: str, ho_date,
     # Clear cache
     load_feedback_for_sample.clear()
     load_all_latest_feedback.clear()
+    sync_latest_feedback_to_sheet(customer, product, ho_date)
 
 
 
@@ -82,68 +83,100 @@ def add_feedback_with_status(customer: str, product: str, ho_date,
     load_feedback_for_sample.clear()
     load_all_latest_feedback.clear()
     # ← sync latest to sheet
-    sync_latest_feedback_to_sheet(customer, product, ho_date, feedback_text.strip(),
-                                   purchased=purchased, fb_status=fb_status)
+    sync_latest_feedback_to_sheet(customer, product, ho_date)
 
 
-def sync_latest_feedback_to_sheet(customer: str, product: str,
-                                   ho_date: str, latest_text: str,
-                                   purchased: str = None, fb_status: str = None):
-    """
-    Update the Feedback column (and, if provided, the Purchased? column)
-    in Sheet1 for the matching row with the latest values.
-    fb_status isn't stored in the sheet (no matching column) — it's
-    accepted here only so callers can pass it without erroring; it's
-    a no-op for the sheet write.
-    """
+def _normalized_date(value) -> str:
+    """Normalize an individual date value to ISO without column inference."""
+    if value is None or str(value).strip() in ("", "nan", "None"):
+        return ""
+    parsed = pd.to_datetime(value, dayfirst=True, errors="coerce")
+    return "" if pd.isna(parsed) else parsed.date().isoformat()
+
+
+def _feedback_order(entry: dict):
+    """Sort by feedback date, breaking same-day ties by latest edit/add time."""
+    return (
+        _normalized_date(entry.get("feedback_date")),
+        str(entry.get("edited_at") or entry.get("added_at") or ""),
+    )
+
+
+def sync_latest_feedback_to_sheet(customer: str, product: str, ho_date) -> bool:
+    """Write the latest Firestore feedback to every matching Sheet1 row."""
     try:
         from auth.gspread_config import get_samples_sheet
         import gspread
- 
-        ws        = get_samples_sheet()
-        all_data  = ws.get_all_values()
-        headers   = [h.strip() for h in all_data[0]]
 
-        # Find column indices
+        db = get_db()
+        key = build_sample_key(customer, product, ho_date)
+        docs = (db.collection("sample_feedback").document(key)
+                  .collection("entries").stream())
+        entries = [{"id": doc.id, **doc.to_dict()} for doc in docs]
+        entries.sort(key=_feedback_order)
+        latest = entries[-1] if entries else {}
+        latest_text = str(latest.get("feedback", "") or "").strip()
+
+        ws = get_samples_sheet()
+        all_data = ws.get_all_values()
+        if not all_data:
+            raise RuntimeError("The main sheet is empty; its header row is missing.")
+
+        headers = [h.strip().casefold() for h in all_data[0]]
         try:
-            cust_col = headers.index("Name of Customer / Party")
-            prod_col = headers.index("Product Name")
-            date_col = headers.index("Hand over to customer date")
-            fb_col   = headers.index("Feedback")
-        except ValueError:
-            return
+            cust_col = headers.index("name of customer / party")
+            prod_col = headers.index("product name")
+            date_col = headers.index("hand over to customer date")
+            fb_col = headers.index("feedback")
+        except ValueError as exc:
+            raise RuntimeError(
+                "The main sheet is missing a required customer, product, "
+                "handover date, or Feedback header."
+            ) from exc
 
-        # Purchased? column is optional — older sheets may not have it yet
-        purchased_col = headers.index("Purchased?") if "Purchased?" in headers else None
+        purchased_col = headers.index("purchased?") if "purchased?" in headers else None
+        target_date = _normalized_date(ho_date)
+        target_customer = " ".join(str(customer).split()).casefold()
+        target_product = " ".join(str(product).split()).casefold()
+        updates = []
 
-        target_date = str(ho_date)[:10]
+        for row_num, row in enumerate(all_data[1:], start=2):
+            row_customer = " ".join(
+                (str(row[cust_col]) if len(row) > cust_col else "").split()
+            ).casefold()
+            row_product = " ".join(
+                (str(row[prod_col]) if len(row) > prod_col else "").split()
+            ).casefold()
+            row_date = _normalized_date(row[date_col] if len(row) > date_col else "")
 
-        for i, row in enumerate(all_data[1:], start=2):
-            row_cust = str(row[cust_col]).strip().lower() if len(row) > cust_col else ""
-            row_prod = str(row[prod_col]).strip().lower() if len(row) > prod_col else ""
-            row_date = str(row[date_col]).strip()[:10]   if len(row) > date_col else ""
+            if (row_customer == target_customer and row_product == target_product
+                    and row_date == target_date):
+                feedback_cell = gspread.utils.rowcol_to_a1(row_num, fb_col + 1)
+                updates.append({"range": feedback_cell, "values": [[latest_text]]})
 
-            try:
-                row_date = str(
-                    pd.to_datetime(row_date, dayfirst=True).date()
-                )
-            except Exception:
-                pass
+                if purchased_col is not None and "purchased" in latest:
+                    purchased_cell = gspread.utils.rowcol_to_a1(row_num, purchased_col + 1)
+                    updates.append({
+                        "range": purchased_cell,
+                        "values": [[latest.get("purchased", "")]],
+                    })
 
-            if (row_cust == customer.strip().lower() and
-                row_prod == product.strip().lower() and
-                row_date == target_date):
-                cell = gspread.utils.rowcol_to_a1(i, fb_col + 1)
-                ws.update_acell(cell, latest_text)
+        if not updates:
+            raise RuntimeError(
+                f"No main-sheet row matched {customer} / {product} / {target_date}."
+            )
 
-                if purchased is not None and purchased_col is not None:
-                    p_cell = gspread.utils.rowcol_to_a1(i, purchased_col + 1)
-                    ws.update_acell(p_cell, purchased)
-                break
+        ws.batch_update(updates, value_input_option="RAW")
 
-    except Exception as e:
-        print(f"[sync_latest_feedback_to_sheet] {e}")
+        from samples_new.sample_constants import load_sample_data
+        load_sample_data.clear()
+        st.session_state.pop("feedback_sheet_sync_error", None)
+        return True
 
+    except Exception as exc:
+        print(f"[sync_latest_feedback_to_sheet] {exc}")
+        st.session_state["feedback_sheet_sync_error"] = str(exc)
+        return False
 
 def delete_feedback(customer: str, product: str, ho_date, entry_id: str):
     """Delete a specific feedback entry."""
@@ -154,6 +187,7 @@ def delete_feedback(customer: str, product: str, ho_date, entry_id: str):
 
     load_feedback_for_sample.clear()
     load_all_latest_feedback.clear()
+    sync_latest_feedback_to_sheet(customer, product, ho_date)
 
 
 @st.cache_data(ttl=120, show_spinner=False)
@@ -165,11 +199,11 @@ def load_feedback_for_sample(customer: str, product: str, ho_date) -> list:
     try:
         db  = get_db()
         key = build_sample_key(customer, product, ho_date)
-        docs = db.collection("sample_feedback").document(key)\
-                 .collection("entries")\
-                 .order_by("feedback_date")\
-                 .stream()
-        return [{"id": d.id, **d.to_dict()} for d in docs]
+        docs = (db.collection("sample_feedback").document(key)
+                  .collection("entries").stream())
+        entries = [{"id": d.id, **d.to_dict()} for d in docs]
+        entries.sort(key=_feedback_order)
+        return entries
     except Exception:
         return []
 
@@ -203,19 +237,32 @@ def load_all_latest_feedback() -> dict:
         for parent_id, entries in grouped.items():
             if not entries:
                 continue
-            entries.sort(key=lambda e: str(e.get("feedback_date", "")))
+            entries.sort(key=_feedback_order)
             result[id_to_key[parent_id]] = entries[-1]  # most recent
         return result
     except Exception:
         return {}
+
+def _normalize_feedback_status(fb_status: str = None):
+    if fb_status is None:
+        return None
+    status = str(fb_status).strip().casefold()
+    return {
+        "positive": "Positive",
+        "negative": "Negative",
+        "pending": "Pending",
+        "hold": "Hold",
+    }.get(status)
+
 
 def classify_feedback(text: str, fb_status: str = None) -> str:
     """
     If fb_status explicitly provided (user-classified), use it directly.
     Otherwise fall back to keyword matching. Supports: Positive, Negative, Pending, Hold
     """
-    if fb_status and str(fb_status).strip() in ("Positive","Negative","Pending","Hold"):
-        return str(fb_status).strip()
+    normalized_status = _normalize_feedback_status(fb_status)
+    if normalized_status:
+        return normalized_status
     if not text or str(text).strip() in ("","nan","None","-","_"):
         return "Pending"
     v = str(text).lower()
@@ -234,6 +281,7 @@ def classify_feedback(text: str, fb_status: str = None) -> str:
     return "Pending"
 
 def get_urgency(days: int, has_feedback: bool, fb_status: str = None, feedback_text: str = "") -> str:
+    fb_status = _normalize_feedback_status(fb_status)
     if fb_status == "Hold":
         return "Hold"
     if fb_status == "Positive":
