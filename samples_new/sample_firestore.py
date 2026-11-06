@@ -3,8 +3,10 @@ Central Firestore operations for sample feedback management.
 All feedback is stored under:
   sample_feedback/{customer}_{product}_{ho_date}/entries/{auto_id}
 """
-import streamlit as st
+import re
 from datetime import datetime
+
+import streamlit as st
 import pandas as pd
 from auth.firebase_config import get_db
 
@@ -14,7 +16,6 @@ from auth.firebase_config import get_db
 # ─────────────────────────────────────────
 def build_sample_key(customer: str, product: str, ho_date) -> str:
     """Build a safe Firestore document ID from the 3 identifiers."""
-    import re
     ho_str = str(ho_date)[:10] if ho_date else "unknown"
     raw    = f"{customer}_{product}_{ho_str}"
     # Replace chars not safe in Firestore doc IDs
@@ -86,18 +87,22 @@ def add_feedback_with_status(customer: str, product: str, ho_date,
     sync_latest_feedback_to_sheet(customer, product, ho_date)
 
 
-def _normalized_date(value) -> str:
-    """Normalize an individual date value to ISO without column inference."""
+def normalize_sample_date(value) -> str:
+    """Normalize a date to ISO, preserving ISO inputs and day-first sheet dates."""
     if value is None or str(value).strip() in ("", "nan", "None"):
         return ""
-    parsed = pd.to_datetime(value, dayfirst=True, errors="coerce")
+    value_str = str(value).strip()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value_str):
+        parsed = pd.to_datetime(value_str, format="%Y-%m-%d", errors="coerce")
+    else:
+        parsed = pd.to_datetime(value, dayfirst=True, errors="coerce")
     return "" if pd.isna(parsed) else parsed.date().isoformat()
 
 
 def _feedback_order(entry: dict):
     """Sort by feedback date, breaking same-day ties by latest edit/add time."""
     return (
-        _normalized_date(entry.get("feedback_date")),
+        normalize_sample_date(entry.get("feedback_date")),
         str(entry.get("edited_at") or entry.get("added_at") or ""),
     )
 
@@ -135,7 +140,7 @@ def sync_latest_feedback_to_sheet(customer: str, product: str, ho_date) -> bool:
             ) from exc
 
         purchased_col = headers.index("purchased?") if "purchased?" in headers else None
-        target_date = _normalized_date(ho_date)
+        target_date = normalize_sample_date(ho_date)
         target_customer = " ".join(str(customer).split()).casefold()
         target_product = " ".join(str(product).split()).casefold()
         updates = []
@@ -147,7 +152,9 @@ def sync_latest_feedback_to_sheet(customer: str, product: str, ho_date) -> bool:
             row_product = " ".join(
                 (str(row[prod_col]) if len(row) > prod_col else "").split()
             ).casefold()
-            row_date = _normalized_date(row[date_col] if len(row) > date_col else "")
+            row_date = normalize_sample_date(
+                row[date_col] if len(row) > date_col else ""
+            )
 
             if (row_customer == target_customer and row_product == target_product
                     and row_date == target_date):
@@ -266,17 +273,21 @@ def classify_feedback(text: str, fb_status: str = None) -> str:
     if not text or str(text).strip() in ("","nan","None","-","_"):
         return "Pending"
     v = str(text).lower()
+    neg  = ["not interested","declined","reject","negative",
+            "not suitable","not good","not fine","not happy",
+            "not satisfied","not approved","not accepted",
+            "did not like","didn't like","do not like","don't like",
+            "not required","not needed","not usable","not acceptable",
+            "no longer required","bad","poor","failed","cancelled"]
+    if any(k in v for k in neg) or re.search(r"\bno\b", v):
+        return "Negative"
+
     pos  = ["good","positive","is interested","approved","accepted",
             "excellent","great","liked","satisfied","happy",
             "ok","fine","proceed","confirmed","yes", "are interested"]
-    
-    neg  = ["reject","negative","not interested","declined",
-            "no","bad","poor","failed","not suitable","cancelled"]
-    
     hold = ["hold","on hold","wait","waiting","defer","later","pause"]
 
     if any(k in v for k in pos):  return "Positive"
-    if any(k in v for k in neg):  return "Negative"
     if any(k in v for k in hold): return "Hold"
     return "Pending"
 
