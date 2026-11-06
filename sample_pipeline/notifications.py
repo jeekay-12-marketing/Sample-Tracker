@@ -109,6 +109,7 @@ NOTIF_CSS = """
 """
 
 
+@st.fragment(run_every="30s")
 def show_notifications():
     st.markdown(SAMPLE_CSS, unsafe_allow_html=True)
     st.markdown(NOTIF_CSS, unsafe_allow_html=True)
@@ -120,6 +121,7 @@ def show_notifications():
         <div class="sd-sub">Pipeline entries that need your attention — check these regularly.</div>
         <div class="sd-divider"></div>
     </div>""", unsafe_allow_html=True)
+    st.caption("Notifications refresh automatically every 30 seconds.")
 
     with st.spinner("Checking pipeline for alerts..."):
         # Pipeline data may have changed in another session or app worker.
