@@ -9,7 +9,10 @@ from samples_new.sample_constants import (
     COL_BRANCH, COL_AREA, COL_CUSTOMER,
     COL_SAMPLE_PROD
 )
-from samples_new.sample_firestore import load_all_latest_feedback, classify_feedback, get_urgency
+from samples_new.sample_firestore import (
+    load_all_latest_feedback, classify_feedback, get_urgency,
+    normalize_sample_date,
+)
 
 INTELLIGENCE_PAGES = {
     "sample_overview":  "📊  Overview",
@@ -123,12 +126,6 @@ def enrich(df: pd.DataFrame, history: dict) -> pd.DataFrame:
     df = df.copy()
     COL_HO_DATE = "Hand over to customer date"
 
-    def normalize_date(value):
-        if value is None or pd.isna(value) or not str(value).strip():
-            return ""
-        parsed = pd.to_datetime(value, dayfirst=True, errors="coerce")
-        return "" if pd.isna(parsed) else parsed.date().isoformat()
-
     def normalize_text(value):
         if value is None or pd.isna(value):
             return ""
@@ -137,13 +134,17 @@ def enrich(df: pd.DataFrame, history: dict) -> pd.DataFrame:
     # Older Firebase entries may differ from the sheet in capitalization or
     # whitespace. Normalize both sides so their explicit status is still used.
     history_by_sample = {
-        (normalize_text(customer), normalize_text(product), normalize_date(ho_date)): entry
+        (
+            normalize_text(customer),
+            normalize_text(product),
+            normalize_sample_date(ho_date),
+        ): entry
         for (customer, product, ho_date), entry in history.items()
     }
 
     def get_latest(row):
         ho     = row[COL_HO_DATE] if COL_HO_DATE in row.index else None
-        ho_str = normalize_date(ho)
+        ho_str = normalize_sample_date(ho)
         key = (
             normalize_text(row.get(COL_CUSTOMER, "")),
             normalize_text(row.get(COL_SAMPLE_PROD, "")),
