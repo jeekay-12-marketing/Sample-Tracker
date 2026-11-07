@@ -66,49 +66,67 @@ def _build_grouped_data(df: pd.DataFrame) -> dict:
     return grouped
 
 
+def _norm_purchased(val) -> str:
+    """Map messy sheet/Firestore purchase values onto Yes / No / Not Yet / not available."""
+    if val is None or pd.isna(val):
+        return "Purchase Data Not Available"
+    v = " ".join(str(val).split()).casefold().replace("\u2019", "'")
+    if v in ("", "nan", "none", "-", "_", "n/a", "na", "purchase data not available"):
+        return "Purchase Data Not Available"
+    if v in ("yes", "y", "purchased"):
+        return "Yes"
+    if v in ("no", "n", "not purchased", "didn't purchase", "didnt purchase", "did not purchase"):
+        return "No"
+    if v == "not yet":
+        return "Not Yet"
+    return str(val).strip()
+
+
 def _enrich(df: pd.DataFrame, history: dict) -> pd.DataFrame:
     """Add Latest Feedback, Feedback Status, Urgency, Days, Purchased columns."""
-    df = df.copy()
+    df = df.copy().reset_index(drop=True)  # unique index so row lookups below are safe
 
-    def get_latest(row):
+    def get_entry(row):
         ho = row[COL_HO_DATE]
         ho_str = str(ho.date()) if pd.notna(ho) else ""
-        key = (str(row.get(COL_CUSTOMER,"")).strip(),
-               str(row.get(COL_SAMPLE_PROD,"")).strip(), ho_str)
-        entry = history.get(key)
+        key = (str(row.get(COL_CUSTOMER, "")).strip(),
+               str(row.get(COL_SAMPLE_PROD, "")).strip(), ho_str)
+        return history.get(key) or {}
+
+    entries = df.apply(get_entry, axis=1)
+
+    def get_latest(row):
+        entry = entries[row.name]
         if entry:
-            return entry.get("feedback","")
-        fb = row.get(COL_FEEDBACK,"")
+            return entry.get("feedback", "")
+        fb = row.get(COL_FEEDBACK, "")
         return "" if pd.isna(fb) else str(fb)
 
     def get_purchased(row):
-        ho = row[COL_HO_DATE]
-        ho_str = str(ho.date()) if pd.notna(ho) else ""
-        key = (str(row.get(COL_CUSTOMER,"")).strip(),
-               str(row.get(COL_SAMPLE_PROD,"")).strip(), ho_str)
-        entry = history.get(key)
-        if entry and entry.get("purchased"):
-            return entry.get("purchased")
+        entry = entries[row.name]
+        if entry.get("purchased"):
+            return _norm_purchased(entry.get("purchased"))
         # Fall back to sheet column if Firestore history has no edit yet
-        sheet_val = row.get("Purchased?", "")
-        sheet_val = "" if pd.isna(sheet_val) else str(sheet_val).strip()
-        return sheet_val if sheet_val else "Purchase Data Not Available"
+        return _norm_purchased(row.get("Purchased?", ""))
 
-    df["Latest Feedback"]  = df.apply(get_latest, axis=1)
-    df["Feedback Status"]  = df["Latest Feedback"].apply(classify_feedback)
-    df["Purchased?"]        = df.apply(get_purchased, axis=1)
-    print(f"[_enrich] 'Purchased?' in df.columns: {'Purchased?' in df.columns}")
-    print(f"[_enrich] Purchased value_counts: {df['Purchased?'].value_counts().to_dict()}")
-    print(f"[_enrich] Sample of first 5 Purchased values: {df['Purchased?'].head(5).tolist()}")
-    df["Days Since HO"]    = (pd.Timestamp.now() - df[COL_HO_DATE]).dt.days.fillna(0).astype(int)
-    df["Has Feedback"]     = df["Feedback Status"] != "Pending"
-    df["Urgency"]          = df.apply(
-        lambda r: get_urgency(r["Days Since HO"], r["Has Feedback"], r["Latest Feedback"]), axis=1
-    )
-    df["ho_date_str"]      = df[COL_HO_DATE].apply(
+    df["Latest Feedback"] = df.apply(get_latest, axis=1)
+    df["_fb_status_fs"]   = [entries[i].get("fb_status") for i in df.index]
+    # Explicit user-chosen status from Firestore wins; otherwise keyword-classify the text
+    df["Feedback Status"] = [
+        classify_feedback(t, s) for t, s in zip(df["Latest Feedback"], df["_fb_status_fs"])
+    ]
+    df["Purchased?"]      = df.apply(get_purchased, axis=1)
+    df["Days Since HO"]   = (pd.Timestamp.now() - df[COL_HO_DATE]).dt.days.fillna(0).astype(int)
+    df["Has Feedback"]    = df["Feedback Status"] != "Pending"
+    df["Urgency"]         = [
+        get_urgency(d, h, s, t)
+        for d, h, s, t in zip(df["Days Since HO"], df["Has Feedback"],
+                              df["_fb_status_fs"], df["Latest Feedback"])
+    ]
+    df["ho_date_str"]     = df[COL_HO_DATE].apply(
         lambda x: str(x.date()) if pd.notna(x) else ""
     )
-    return df
+    return df.drop(columns=["_fb_status_fs"])
 
 
 def _show_needs_attention(fdf):
