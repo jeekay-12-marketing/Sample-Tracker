@@ -167,9 +167,50 @@ def get_pipeline_entry(doc_id: str) -> dict:
 # ─────────────────────────────────────────
 # NOTIFICATION CHECKS
 # ─────────────────────────────────────────
+ALERT_DAYS_MEDIUM = 7    # alert starts after this many days
+ALERT_DAYS_HIGH   = 14   # escalates to high after this many days
+
+# One rule per stage that can get "stuck". Stages not listed here
+# (handed_over, legacy) never produce alerts.
+# The special key "enquiry_in_stock" covers enquiries where the product is
+# already in stock but hasn't been handed over yet.
+ALERT_RULES = {
+    "supplier_enquiry": {
+        "type":       "supplier_no_response",
+        "icon":       "📤",
+        "date_field": "supplier_enquiry_date",
+        "title":      "SUPPLIER NOT RESPONDING",
+        "detail":     "ISSUE: {supplier} contacted {days} days ago",
+    },
+    "shipped": {
+        "type":       "not_received",
+        "icon":       "🚚",
+        "date_field": "supplier_shipment_date",
+        "title":      "STOCK NOT RECEIVED",
+        "detail":     "ISSUE: {product} · Shipped {days} days ago",
+    },
+    "stock_received": {
+        "type":       "not_handed_over",
+        "icon":       "📦",
+        "date_field": "stock_received_date",
+        "title":      "STOCK RECEIVED, NOT HANDED OVER",
+        "detail":     "ISSUE: {product} · Received {days} days ago",
+    },
+    "enquiry_in_stock": {
+        "type":       "not_handed_over",
+        "icon":       "📦",
+        "date_field": "enquiry_date",
+        "title":      "IN STOCK, NOT HANDED OVER",
+        "detail":     "ISSUE: Product in Stock - Not Handed Over",
+    },
+}
+
+
 def get_pipeline_alerts(df: pd.DataFrame) -> list:
     """
     Check pipeline entries against thresholds.
+    Alerts are derived only from each entry's CURRENT stage in Firestore,
+    so an entry that has moved on (or been handed over) never alerts.
     Returns list of alert dicts.
     """
     if df.empty:
@@ -180,93 +221,40 @@ def get_pipeline_alerts(df: pd.DataFrame) -> list:
 
     for _, row in df.iterrows():
         stage    = row.get("stage", "")
-        customer = row.get("customer", "—")
-        supplier = row.get("supplier", "-")
-        product  = row.get("sample_product", "—")
         in_stock = row.get("in_stock", "")
-        doc_id   = row.get("_doc_id", "")
+
+        # In-stock rule applies ONLY while still at the enquiry stage.
+        rule_key = "enquiry_in_stock" if (stage == "enquiry" and in_stock == "Yes") else stage
+        rule = ALERT_RULES.get(rule_key)
+        if not rule:
+            continue
+
+        start = row.get(rule["date_field"])
+        if pd.isna(start):
+            continue
+
+        days = (today - start).days
+        if days <= ALERT_DAYS_MEDIUM:
+            continue
+
+        customer = row.get("customer", "—")
+        supplier = row.get("supplier", "—")
+        product  = row.get("sample_product", "—")
         branch   = row.get("branch", "—")
         area     = row.get("area", "—")
 
-        # Alert 1 — Supplier not responding (5 days)
-        if stage == "supplier_enquiry":
-            sup_enq = row.get("supplier_enquiry_date")
-            if pd.notna(sup_enq):
-                days = (today - sup_enq).days
-                if days > 7:
-                    alerts.append({
-                        "type":     "supplier_no_response",
-                        "icon":     "📤",
-                        "severity": "high" if days >14 else "medium",
-                        "title":    f"SUPPLIER NOT RESPONDING  — {customer} || {product}",
-                        "detail":   f"ISSUE: {supplier} contacted {days} days ago  ",
-                        "days":     days,
-                        "doc_id":   doc_id,
-                        "loc_details": f"Branch: {branch}, Area: {area}",
-                        "branch":branch,
-                        "area": area,
-
-    
-                    })
-
-        # Alert 2 — Shipped but not received (7 days)
-        elif stage == "shipped":
-            ship_date = row.get("supplier_shipment_date")
-            if pd.notna(ship_date):
-                days = (today - ship_date).days
-                if days > 7:
-                    alerts.append({
-                        "type":     "not_received",
-                        "icon":     "🚚",
-                        "severity": "high" if days > 14 else "medium",
-                        "title":    f"STOCK NOT RECEIVED — {customer} || {product} ",
-                        "detail":   f"ISSUE: {product} · Shipped {days} days ago ",
-                        "days":     days,
-                        "doc_id":   doc_id,
-                        "loc_details": f"Branch: {branch}, Area: {area}",
-                        "branch":branch,
-                        "area": area,                        
-
-                    })
-
-        # Alert 3 — Received but not handed over (3 days)
-        elif stage == "stock_received":
-            recv_date = row.get("stock_received_date")
-            if pd.notna(recv_date):
-                days = (today - recv_date).days
-                if days > 7:
-                    alerts.append({
-                        "type":     "not_handed_over",
-                        "icon":     "📦",
-                        "severity": "high" if days > 14 else "medium",
-                        "title":    f"STOCK RECEIVED, NOT HANDED OVER — {customer} || {product}",
-                        "detail":   f"ISSUE: {product} · Received {days} days ago  ",
-                        "days":     days,
-                        "doc_id":   doc_id,
-                        "loc_details": f"Branch: {branch}, Area: {area}",
-                        "branch":branch,
-                        "area": area,
-                                                                })
-
-        elif in_stock == "Yes":
-            enq_date = row.get("enquiry_date")
-            if pd.notna(enq_date):
-                days = (today - enq_date).days
-                if days > 7:
-                    alerts.append({
-                        "type":     "not_handed_over",
-                        "icon":     "📦",
-                        "severity": "high" if days > 14 else "medium",
-                        "title":    f"IN STOCK, NOT HANDED OVER — {customer} || {product}",
-                        "detail":   f"ISSUE: Product in Stock - Not Handed Over ",
-                        "days":     days,
-                        "doc_id":   doc_id,
-                        "loc_details": f"Branch: {branch}, Area: {area}",
-                        "branch":branch,
-                        "area": area,
-                    })
-
-
+        alerts.append({
+            "type":        rule["type"],
+            "icon":        rule["icon"],
+            "severity":    "high" if days > ALERT_DAYS_HIGH else "medium",
+            "title":       f"{rule['title']} — {customer} || {product}",
+            "detail":      rule["detail"].format(supplier=supplier, product=product, days=days),
+            "days":        days,
+            "doc_id":      row.get("_doc_id", ""),
+            "loc_details": f"Branch: {branch}, Area: {area}",
+            "branch":      branch,
+            "area":        area,
+        })
 
     # Sort by severity then days
     severity_order = {"high": 0, "medium": 1}
